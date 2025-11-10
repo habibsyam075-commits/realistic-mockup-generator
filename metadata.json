@@ -1,0 +1,5 @@
+{
+  "name": "Realistic Mockup Generator",
+  "description": "An application to create realistic mockups of various effects (engraving, screen printing, embossing) on products. Users can upload a product photo, a design, position the design, choose an effect, and generate a photorealistic final product image using AI.",
+  "requestFramePermissions": []
+}
