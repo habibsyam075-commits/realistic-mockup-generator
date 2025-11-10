@@ -21,6 +21,23 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [lastEditorData, setLastEditorData] = useState<DesignTransform[] | null>(null);
   const [lastMockupType, setLastMockupType] = useState<MockupType>(MockupType.ENGRAVE);
+  const [apiKeySelected, setApiKeySelected] = useState<boolean | null>(null);
+
+
+  useEffect(() => {
+    const checkApiKey = async () => {
+      // @ts-ignore
+      if (window.aistudio) {
+        // @ts-ignore
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        setApiKeySelected(hasKey);
+      } else {
+        // Fallback for local development if aistudio is not present
+        setApiKeySelected(true); 
+      }
+    };
+    checkApiKey();
+  }, []);
 
 
   useEffect(() => {
@@ -79,10 +96,16 @@ const App: React.FC = () => {
       const resultBase64 = await generateMockup(compositeImageBase64, mockupType);
       setMockupResult(resultBase64);
       setAppState(AppState.RESULT);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setError('Failed to generate mockup. Please try again.');
-      setAppState(AppState.EDIT);
+      if (err.message && (err.message.includes('API key not valid') || err.message.includes('Requested entity was not found'))) {
+        setError('Your API Key appears to be invalid. Please select a valid key to continue.');
+        setApiKeySelected(false);
+        setAppState(AppState.UPLOAD_FILES); // Reset to a safe state
+      } else {
+        setError('Failed to generate mockup. Please try again.');
+        setAppState(AppState.EDIT);
+      }
     }
   }, [walletImage, designImages]);
 
@@ -218,19 +241,61 @@ const App: React.FC = () => {
     }
   };
 
+  const ApiKeySelectionScreen = () => (
+    <div className="w-full max-w-lg mx-auto text-center">
+        <h2 className="text-2xl font-bold text-white mb-4">API Key Required</h2>
+        <p className="text-gray-400 mb-6">
+            To generate mockups, this app requires a Gemini API key. Please select your key to continue.
+            <a 
+                href="https://ai.google.dev/gemini-api/docs/billing" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-indigo-400 hover:underline ml-1"
+            >
+                Learn more about billing.
+            </a>
+        </p>
+        <button
+            onClick={async () => {
+                // @ts-ignore
+                if (window.aistudio) {
+                    // @ts-ignore
+                    await window.aistudio.openSelectKey();
+                    setApiKeySelected(true);
+                    setError(null);
+                }
+            }}
+            className="px-8 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition-colors duration-200"
+        >
+            Select API Key
+        </button>
+        {error && <p className="text-red-400 mt-4">{error}</p>}
+    </div>
+  );
+
   return (
     <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 lg:p-8 font-sans">
        <div className="w-full max-w-4xl mx-auto">
         <header className="text-center mb-8">
             <h1 className="text-3xl sm:text-4xl font-bold text-white tracking-tight">Realistic Mockup Generator</h1>
             <p className="text-gray-400 mt-2 text-lg">
-              {appState === AppState.UPLOAD_FILES ? 'Upload a product photo and your design to get started.' : 'Create photorealistic previews of your custom designs.'}
+              {apiKeySelected === false 
+                ? 'Select your Gemini API key to continue.'
+                : appState === AppState.UPLOAD_FILES ? 'Upload a product photo and your design to get started.' : 'Create photorealistic previews of your custom designs.'}
             </p>
         </header>
         <main className="bg-gray-800 rounded-xl shadow-2xl p-6 sm:p-8 flex items-center justify-center min-h-[500px]">
-            {renderContent()}
-            {error && appState === AppState.EDIT && (
-              <p className="text-red-400 mt-4 text-center">{error}</p>
+            {apiKeySelected === null ? (
+                <Spinner text="Initializing..."/>
+            ) : apiKeySelected === false ? (
+                <ApiKeySelectionScreen />
+            ) : (
+                <>
+                  {renderContent()}
+                  {error && appState === AppState.EDIT && (
+                    <p className="text-red-400 mt-4 text-center">{error}</p>
+                  )}
+                </>
             )}
         </main>
          <footer className="text-center mt-8 text-gray-500 text-sm">
