@@ -1,4 +1,5 @@
 import React, { useRef, useState, useCallback } from 'react';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface FileUploadProps {
   onFileSelect: (files: FileList) => void;
@@ -10,6 +11,7 @@ interface FileUploadProps {
 const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, title, description, multiple = false }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const { t } = useLanguage();
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -65,9 +67,9 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, title, descriptio
         <div className="flex flex-col items-center">
           <svg className="w-10 h-10 mb-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
           <p className="mb-2 text-sm text-gray-400">
-            <span className="font-semibold text-indigo-400">Click to upload</span> or drag and drop
+            <span className="font-semibold text-indigo-400">{t('clickToUpload')}</span> {t('orDragAndDrop')}
           </p>
-          <p className="text-xs text-gray-500">PNG, JPG, or WEBP</p>
+          <p className="text-xs text-gray-500">{t('fileTypes')}</p>
         </div>
         <input
           ref={fileInputRef}

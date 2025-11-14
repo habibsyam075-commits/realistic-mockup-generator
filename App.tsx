@@ -4,8 +4,12 @@ import FileUpload from './components/FileUpload';
 import MockupEditor from './components/MockupEditor';
 import ResultDisplay from './components/ResultDisplay';
 import Spinner from './components/Spinner';
+import ConfirmationScreen from './components/ConfirmationScreen';
+import ApiKeyScreen from './components/ApiKeyScreen';
 import { generateMockup } from './services/geminiService';
-import { createCompositeImage } from './utils/imageUtils';
+import { GenerationAssets } from './utils/imageUtils';
+import { useLanguage } from './contexts/LanguageContext';
+import LanguageSwitcher from './components/LanguageSwitcher';
 
 export type DesignTransform = {
   position: { x: number; y: number };
@@ -14,31 +18,28 @@ export type DesignTransform = {
 };
 
 const App: React.FC = () => {
+  const { t } = useLanguage();
+  const [apiKey, setApiKey] = useState<string | null>(() => localStorage.getItem('gemini-api-key'));
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+
   const [appState, setAppState] = useState<AppState>(AppState.UPLOAD_FILES);
   const [walletImage, setWalletImage] = useState<string | null>(null);
   const [designImages, setDesignImages] = useState<string[]>([]);
   const [mockupResult, setMockupResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  
+  // State to hold data for confirmation and regeneration
   const [lastEditorData, setLastEditorData] = useState<DesignTransform[] | null>(null);
   const [lastMockupType, setLastMockupType] = useState<MockupType>(MockupType.ENGRAVE);
-  const [apiKeySelected, setApiKeySelected] = useState<boolean | null>(null);
-
-
-  useEffect(() => {
-    const checkApiKey = async () => {
-      // @ts-ignore
-      if (window.aistudio) {
-        // @ts-ignore
-        const hasKey = await window.aistudio.hasSelectedApiKey();
-        setApiKeySelected(hasKey);
-      } else {
-        // Fallback for local development if aistudio is not present
-        setApiKeySelected(true); 
-      }
-    };
-    checkApiKey();
-  }, []);
-
+  const [lastContainerSize, setLastContainerSize] = useState<{width: number, height: number} | null>(null);
+  const [captureImage, setCaptureImage] = useState<string | null>(null);
+  const [lastGenerationAssets, setLastGenerationAssets] = useState<GenerationAssets | null>(null);
+  
+  const handleKeySubmit = (key: string) => {
+    setApiKey(key);
+    localStorage.setItem('gemini-api-key', key);
+    setApiKeyError(null); // Clear previous errors on new submission
+  };
 
   useEffect(() => {
     if (walletImage && designImages.length > 0 && appState === AppState.UPLOAD_FILES) {
@@ -79,56 +80,74 @@ const App: React.FC = () => {
   };
 
 
-  const runGeneration = useCallback(async (editorData: DesignTransform[], containerSize: { width: number, height: number}, mockupType: MockupType) => {
-    if (!walletImage || designImages.length === 0) return;
-
+  const runGeneration = useCallback(async (assets: GenerationAssets, mockupType: MockupType) => {
+    if (!apiKey) {
+      setError("API Key is not set.");
+      setAppState(AppState.UPLOAD_FILES);
+      return;
+    }
     setAppState(AppState.GENERATING);
     setError(null);
+    setApiKeyError(null);
 
     try {
-      const compositeImageBase64 = await createCompositeImage(
-        walletImage,
-        designImages,
-        editorData,
-        containerSize
+      const resultData = await generateMockup(
+        assets.guideImage,
+        mockupType,
+        apiKey
       );
       
-      const resultBase64 = await generateMockup(compositeImageBase64, mockupType);
-      setMockupResult(resultBase64);
+      setMockupResult(resultData);
       setAppState(AppState.RESULT);
     } catch (err: any) {
       console.error(err);
-      if (err.message && (err.message.includes('API key not valid') || err.message.includes('Requested entity was not found'))) {
-        setError('Your API Key appears to be invalid. Please select a valid key to continue.');
-        setApiKeySelected(false);
-        setAppState(AppState.UPLOAD_FILES); // Reset to a safe state
+      if (err.message === 'API_KEY_INVALID') {
+        setApiKey(null);
+        localStorage.removeItem('gemini-api-key');
+        setApiKeyError(t('apiKeyError'));
       } else {
-        setError('Failed to generate mockup. Please try again.');
+        setError(t('errorFailedToGenerate'));
         setAppState(AppState.EDIT);
       }
     }
-  }, [walletImage, designImages]);
+  }, [apiKey, t]);
 
-  const handleGenerate = useCallback(async (
+  const handleGenerate = useCallback((
+    assets: GenerationAssets,
     designs: DesignTransform[],
     containerSize: { width: number; height: number },
     mockupType: MockupType
   ) => {
+    setCaptureImage(assets.captureImage);
+    setLastGenerationAssets(assets);
     setLastEditorData(designs);
+    setLastContainerSize(containerSize);
     setLastMockupType(mockupType);
-    await runGeneration(designs, containerSize, mockupType);
-  }, [runGeneration]);
+    setAppState(AppState.CONFIRM);
+  }, []);
+
+  const handleConfirmGenerate = useCallback(async () => {
+    if (lastGenerationAssets) {
+        await runGeneration(lastGenerationAssets, lastMockupType);
+    } else {
+        console.error("Missing assets for generation confirmation.");
+        setAppState(AppState.EDIT);
+    }
+  }, [runGeneration, lastGenerationAssets, lastMockupType]);
+  
+  const handleCancelConfirm = () => {
+    setAppState(AppState.EDIT);
+    setCaptureImage(null);
+  };
 
   const handleRegenerate = useCallback(async () => {
-    if (lastEditorData && walletImage) {
-        // We need a container size. Let's create a temporary image to get it.
-        const img = new Image();
-        img.onload = () => {
-            runGeneration(lastEditorData, { width: img.width, height: img.height}, lastMockupType);
-        };
-        img.src = walletImage;
+    if (lastGenerationAssets) {
+      await runGeneration(lastGenerationAssets, lastMockupType);
+    } else {
+      console.error("Missing assets for regeneration.");
+      setAppState(AppState.EDIT);
     }
-  }, [lastEditorData, runGeneration, walletImage, lastMockupType]);
+  }, [lastGenerationAssets, lastMockupType, runGeneration]);
   
   const handleAdjust = () => {
     setAppState(AppState.EDIT);
@@ -142,6 +161,9 @@ const App: React.FC = () => {
     setError(null);
     setLastEditorData(null);
     setLastMockupType(MockupType.ENGRAVE);
+    setCaptureImage(null);
+    setLastContainerSize(null);
+    setLastGenerationAssets(null);
   };
   
   const renderDesignUploads = () => {
@@ -149,15 +171,15 @@ const App: React.FC = () => {
       <div className="flex flex-col w-full">
         {designImages.length > 0 && (
           <div className="mb-4">
-            <h3 className="text-lg font-semibold text-white mb-2 text-center">Your Designs</h3>
+            <h3 className="text-lg font-semibold text-white mb-2 text-center">{t('yourDesigns')}</h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 p-2 bg-gray-900/50 rounded-lg">
               {designImages.map((src, index) => (
                 <div key={index} className="relative group">
-                  <img src={src} alt={`Design ${index + 1}`} className="w-full h-full object-contain rounded-md bg-gray-700 aspect-square" />
+                  <img src={src} alt={`${t('design')} ${index + 1}`} className="w-full h-full object-contain rounded-md bg-gray-700 aspect-square" />
                   <button 
                     onClick={() => handleRemoveDesign(index)}
                     className="absolute top-1 right-1 w-6 h-6 bg-red-600/80 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                    aria-label="Remove design"
+                    aria-label={t('removeDesign')}
                   >
                     &#x2715;
                   </button>
@@ -168,8 +190,8 @@ const App: React.FC = () => {
         )}
         <FileUpload
           onFileSelect={handleDesignUpload}
-          title={designImages.length === 0 ? "Step 2: Upload Design(s)" : "Add More Designs"}
-          description="Use PNGs with a transparent background for best results."
+          title={designImages.length === 0 ? t('step2Title') : t('addMoreDesigns')}
+          description={t('step2Desc')}
           multiple
         />
       </div>
@@ -181,33 +203,53 @@ const App: React.FC = () => {
       case AppState.UPLOAD_FILES:
         return (
           <div className="w-full max-w-4xl mx-auto">
+            <div className="bg-gray-700/50 rounded-lg p-6 mb-8 text-center">
+              <h2 className="text-xl font-bold text-white mb-4">{t('howItWorksTitle')}</h2>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-gray-300">
+                <div className="flex flex-col items-center">
+                  <div className="flex items-center justify-center w-12 h-12 bg-indigo-600 rounded-full text-white font-bold text-xl mb-3">1</div>
+                  <h3 className="font-semibold text-white mb-1">{t('howItWorksStep1Title')}</h3>
+                  <p className="text-sm">{t('howItWorksStep1Desc')}</p>
+                </div>
+                <div className="flex flex-col items-center">
+                  <div className="flex items-center justify-center w-12 h-12 bg-indigo-600 rounded-full text-white font-bold text-xl mb-3">2</div>
+                  <h3 className="font-semibold text-white mb-1">{t('howItWorksStep2Title')}</h3>
+                  <p className="text-sm">{t('howItWorksStep2Desc')}</p>
+                </div>
+                <div className="flex flex-col items-center">
+                  <div className="flex items-center justify-center w-12 h-12 bg-indigo-600 rounded-full text-white font-bold text-xl mb-3">3</div>
+                  <h3 className="font-semibold text-white mb-1">{t('howItWorksStep3Title')}</h3>
+                  <p className="text-sm">{t('howItWorksStep3Desc')}</p>
+                </div>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              {/* Product Upload */}
               <div className="flex flex-col">
                 {walletImage ? (
                   <div className="flex flex-col items-center text-center">
-                    <h2 className="text-xl font-semibold text-white mb-4">Product Photo</h2>
+                    <h2 className="text-xl font-semibold text-white mb-4">{t('productPhoto')}</h2>
                     <div className="p-2 bg-gray-700 rounded-lg shadow-lg w-full">
-                      <img src={walletImage} alt="Product preview" className="rounded-md w-full object-contain max-h-64" />
+                      <img src={walletImage} alt={t('productPreview')} className="rounded-md w-full object-contain max-h-64" />
                     </div>
                     <button
                       onClick={() => setWalletImage(null)}
                       className="mt-4 px-4 py-2 bg-gray-600 text-white font-semibold rounded-lg shadow-md hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 focus:ring-offset-gray-800 transition-colors duration-200"
                     >
-                      Change Product
+                      {t('changeProduct')}
                     </button>
                   </div>
                 ) : (
                   <FileUpload
                     onFileSelect={handleWalletUpload}
-                    title="Step 1: Upload Product Photo"
-                    description="Select a clear, well-lit photo of the product."
+                    title={t('step1Title')}
+                    description={t('step1Desc')}
                   />
                 )}
               </div>
-              {/* Design Upload */}
               {renderDesignUploads()}
             </div>
+            {error && <p className="text-red-400 mt-4 text-center">{error}</p>}
           </div>
         );
       case AppState.EDIT:
@@ -222,13 +264,25 @@ const App: React.FC = () => {
           );
         }
         return null;
+      case AppState.CONFIRM:
+        if (captureImage) {
+          return (
+            <ConfirmationScreen
+              captureImage={captureImage}
+              onConfirm={handleConfirmGenerate}
+              onCancel={handleCancelConfirm}
+              mockupType={lastMockupType}
+            />
+          );
+        }
+        return null;
       case AppState.GENERATING:
-        return <Spinner text="AI is crafting your mockup... This may take a moment." />;
+        return <Spinner text={t('generatingSpinner')} />;
       case AppState.RESULT:
         if (mockupResult) {
           return (
             <ResultDisplay 
-              mockupImage={mockupResult} 
+              mockupResult={mockupResult}
               onReset={handleReset}
               onRegenerate={handleRegenerate}
               onAdjust={handleAdjust}
@@ -241,61 +295,26 @@ const App: React.FC = () => {
     }
   };
 
-  const ApiKeySelectionScreen = () => (
-    <div className="w-full max-w-lg mx-auto text-center">
-        <h2 className="text-2xl font-bold text-white mb-4">API Key Required</h2>
-        <p className="text-gray-400 mb-6">
-            To generate mockups, this app requires a Gemini API key. Please select your key to continue.
-            <a 
-                href="https://ai.google.dev/gemini-api/docs/billing" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="text-indigo-400 hover:underline ml-1"
-            >
-                Learn more about billing.
-            </a>
-        </p>
-        <button
-            onClick={async () => {
-                // @ts-ignore
-                if (window.aistudio) {
-                    // @ts-ignore
-                    await window.aistudio.openSelectKey();
-                    setApiKeySelected(true);
-                    setError(null);
-                }
-            }}
-            className="px-8 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition-colors duration-200"
-        >
-            Select API Key
-        </button>
-        {error && <p className="text-red-400 mt-4">{error}</p>}
-    </div>
-  );
+  if (!apiKey) {
+    return <ApiKeyScreen onKeySubmit={handleKeySubmit} error={apiKeyError} />;
+  }
 
   return (
     <div className="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 lg:p-8 font-sans">
        <div className="w-full max-w-4xl mx-auto">
-        <header className="text-center mb-8">
-            <h1 className="text-3xl sm:text-4xl font-bold text-white tracking-tight">Realistic Mockup Generator</h1>
+        <header className="text-center mb-8 relative">
+            <h1 className="text-3xl sm:text-4xl font-bold text-white tracking-tight">{t('mainTitle')}</h1>
             <p className="text-gray-400 mt-2 text-lg">
-              {apiKeySelected === false 
-                ? 'Select your Gemini API key to continue.'
-                : appState === AppState.UPLOAD_FILES ? 'Upload a product photo and your design to get started.' : 'Create photorealistic previews of your custom designs.'}
+              {t('subTitle')}
             </p>
+            <div className="absolute top-0 right-0">
+                <LanguageSwitcher />
+            </div>
         </header>
         <main className="bg-gray-800 rounded-xl shadow-2xl p-6 sm:p-8 flex items-center justify-center min-h-[500px]">
-            {apiKeySelected === null ? (
-                <Spinner text="Initializing..."/>
-            ) : apiKeySelected === false ? (
-                <ApiKeySelectionScreen />
-            ) : (
-                <>
-                  {renderContent()}
-                  {error && appState === AppState.EDIT && (
-                    <p className="text-red-400 mt-4 text-center">{error}</p>
-                  )}
-                </>
+            {renderContent()}
+            {error && appState === AppState.EDIT && (
+              <p className="text-red-400 mt-4 text-center">{error}</p>
             )}
         </main>
          <footer className="text-center mt-8 text-gray-500 text-sm">

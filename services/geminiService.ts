@@ -1,69 +1,76 @@
 import { GoogleGenAI, Modality, GenerateContentResponse } from "@google/genai";
 import { MockupType } from '../types';
 
-const MODEL_NAME = 'gemini-2.5-flash-image';
+const IMAGE_MODEL_NAME = 'gemini-2.5-flash-image';
+
 
 const getPromptForType = (mockupType: MockupType): string => {
-  const commonInstructions = `
-**CRITICAL INSTRUCTION:**
-The design's position, size, and aspect ratio in the input image are PRECISE. You MUST NOT change them. The final effect must appear exactly where the overlay is.
+  const printPrompt = `You are a photorealistic image modification expert.
+INPUT: You will receive a single composite image showing a design placed on a product.
+TASK: The design currently looks flat, like a sticker. Your job is to make the design look like a realistic, high-quality screen print on the product's material.
+- Add realistic texture to the print that matches the underlying material (e.g., fabric weave).
+- Apply lighting effects (shadows, highlights) so the print integrates seamlessly with the product.
+- Make the print conform to the product's surface contours (curves, folds, seams).
+CRITICAL RULE: You MUST NOT change the position, size, shape, rotation, or color of the design. Modify its texture and lighting ONLY. The final output must be the full image with the realistic print.`;
 
-**PROCESS:**
-1.  Identify the overlay design and the product (e.g., leather wallet, t-shirt, etc.) beneath it.
-2.  Apply the specified effect realistically.
-3.  The effect must perfectly match the product's lighting, shadows, and material grain.
-4.  **Crucially, the design must conform to the product's surface geometry. If the product has folds, creases, or curves, the design must bend, warp, and distort naturally to follow those contours. This is essential for a realistic result.**
-5.  Do not alter any other part of the image (product shape, background, etc.).
-6.  Output ONLY the final, edited image.`;
+  const magentaMaskPrompt = `You are a high-precision photorealistic image processor.
+INPUT: You will receive a single image of a product with a solid bright magenta (#FF00FF) shape overlaid on it.
+TASK: Your only job is to replace the magenta area with a realistic [EFFECT] effect.
+- The effect should look like it is carved into the product's material.
+- The effect's color should be a natural, darkened shade of the product's material.
+- It must have realistic depth, texture, and internal shadowing.
+- It must conform to the surface contours and lighting of the product.
+CRITICAL RULES:
+- The boundaries of the magenta area are absolute. The effect MUST perfectly fill the magenta area with ZERO PIXEL DEVIATION.
+- You MUST NOT change any part of the image outside the magenta area.
+The final output must be the full image with the effect applied.`;
 
   switch (mockupType) {
     case MockupType.PRINT:
-      return `You are an AI image editing specialist. Your task is to convert the overlay design in the provided image into a photorealistic screen print on the product.
-
-The design should look like it has been printed with high-quality ink. The colors of the original design MUST be preserved. The print should follow the texture of the material, showing subtle imperfections and interaction with the material's grain to make it look realistic.
-${commonInstructions}`;
+      return printPrompt;
     case MockupType.EMBOSS:
-      return `You are an AI image editing specialist. Your task is to convert the overlay design in the provided image into a photorealistic 'debossed' (pressed in) effect on the product.
-
-The design should appear indented into the material, creating realistic depth with shadows and highlights that match the image's lighting. The color of the design should be the natural, darkened color of the pressed material, not the original design color.
-${commonInstructions}`;
+      return magentaMaskPrompt.replace('[EFFECT]', 'debossing (pressed into the material)') + `
+ADDITIONAL DETAILS:
+- The effect should look 'debossed' (pressed into) the material.
+- It must have realistic depth and texture, with subtle internal shadowing.`;
     case MockupType.ENGRAVE:
     default:
-      return `You are an AI image editing specialist. Your task is to convert the overlay design in the provided image into a photorealistic laser engraving on the product.
-
-Realistically "carve" the design into the material, giving it depth. The engraved area should appear slightly darkened or burnt, typical of laser engraving on materials like leather or wood.
-${commonInstructions}`;
+      return magentaMaskPrompt.replace('[EFFECT]', 'laser engraving') + `
+ADDITIONAL DETAILS:
+- The effect should look like a laser engraving on the material.
+- The engraved area should appear slightly darkened or burnt, typical of laser engraving.`;
   }
 }
 
-export const generateMockup = async (compositeImageBase64: string, mockupType: MockupType): Promise<string> => {
-  if (!process.env.API_KEY) {
-    throw new Error("API_KEY environment variable is not set.");
+export const generateMockup = async (
+    guideImage: string,
+    mockupType: MockupType,
+    apiKey: string,
+  ): Promise<string> => {
+
+  if (!apiKey) {
+    throw new Error("API Key is missing.");
   }
   
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
+  const ai = new GoogleGenAI({ apiKey });
   const prompt = getPromptForType(mockupType);
-
-  // Remove the data URL prefix e.g. "data:image/jpeg;base64,"
-  const base64Data = compositeImageBase64.split(',')[1];
   
-  const imagePart = {
-    inlineData: {
-      data: base64Data,
-      mimeType: 'image/jpeg',
-    },
-  };
+  const parts = [
+    { text: prompt },
+    {
+      inlineData: {
+          data: guideImage.split(',')[1],
+          mimeType: guideImage.startsWith('data:image/png') ? 'image/png' : 'image/jpeg',
+      }
+    }
+  ];
 
-  const textPart = {
-    text: prompt,
-  };
 
   try {
     const response: GenerateContentResponse = await ai.models.generateContent({
-        model: MODEL_NAME,
+        model: IMAGE_MODEL_NAME,
         contents: {
-          parts: [imagePart, textPart],
+          parts: parts,
         },
         config: {
             responseModalities: [Modality.IMAGE],
@@ -79,8 +86,11 @@ export const generateMockup = async (compositeImageBase64: string, mockupType: M
     
     throw new Error("No image was generated by the model.");
 
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error generating mockup with Gemini API:", error);
+    if (error.message && (error.message.includes('API key not valid') || error.message.includes('API_KEY_INVALID'))) {
+      throw new Error("API_KEY_INVALID");
+    }
     throw new Error("Failed to communicate with the AI model.");
   }
 };

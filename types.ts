@@ -1,6 +1,7 @@
 export enum AppState {
   UPLOAD_FILES,
   EDIT,
+  CONFIRM,
   GENERATING,
   RESULT,
 }

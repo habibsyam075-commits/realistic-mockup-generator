@@ -1,11 +1,15 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { DesignTransform } from '../App';
 import { MockupType } from '../types';
+import Spinner from './Spinner';
+import { generatePreviewAndGuides, GenerationAssets } from '../utils/imageUtils';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface MockupEditorProps {
   walletImage: string;
   designImages: string[];
   onGenerate: (
+    assets: GenerationAssets,
     designs: DesignTransform[],
     containerSize: { width: number; height: number },
     mockupType: MockupType
@@ -33,6 +37,7 @@ const MockupEditor: React.FC<MockupEditorProps> = ({
   onGenerate, 
   initialDesigns
 }) => {
+  const { t } = useLanguage();
   const containerRef = useRef<HTMLDivElement>(null);
   const walletImageRef = useRef<HTMLImageElement>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -42,6 +47,25 @@ const MockupEditor: React.FC<MockupEditorProps> = ({
   const [selectedType, setSelectedType] = useState<MockupType>(MockupType.ENGRAVE);
   
   const [interaction, setInteraction] = useState<Interaction>(null);
+  const [imageAspectRatio, setImageAspectRatio] = useState<number | null>(null);
+
+  const mockupTypeDescriptions: Record<MockupType, string> = {
+    [MockupType.ENGRAVE]: t('engraveDescription'),
+    [MockupType.PRINT]: t('printDescription'),
+    [MockupType.EMBOSS]: t('embossDescription'),
+  };
+
+  useEffect(() => {
+    if (!walletImage) return;
+    const img = new Image();
+    img.onload = () => {
+      if (img.naturalHeight > 0) {
+        setImageAspectRatio(img.naturalWidth / img.naturalHeight);
+      }
+    };
+    img.src = walletImage;
+  }, [walletImage]);
+
 
   useEffect(() => {
     setDesigns(
@@ -226,14 +250,28 @@ const MockupEditor: React.FC<MockupEditorProps> = ({
   }, [interaction, handleMouseMove, handleMouseUp]);
 
   const handleGenerateClick = async () => {
-    if (!walletImageRef.current) return;
+    if (!walletImageRef.current || !imageAspectRatio) return;
+
     setIsLoading(true);
-    const containerSize = {
-        width: walletImageRef.current.clientWidth,
-        height: walletImageRef.current.clientHeight
-    };
-    await onGenerate(designs, containerSize, selectedType);
-    setIsLoading(false);
+    try {
+      const width = walletImageRef.current.clientWidth;
+      const height = width / imageAspectRatio;
+      const containerSize = { width, height };
+      
+      const assets = await generatePreviewAndGuides(
+        walletImage,
+        designImages,
+        designs,
+        containerSize,
+        selectedType
+      );
+
+      onGenerate(assets, designs, containerSize, selectedType);
+    } catch (error) {
+        console.error("Failed to create capture image", error);
+    } finally {
+        setIsLoading(false);
+    }
   };
 
   const cornerHandles: Interaction['handle'][] = ['nw', 'ne', 'sw', 'se'];
@@ -241,92 +279,100 @@ const MockupEditor: React.FC<MockupEditorProps> = ({
 
   return (
     <div className="w-full flex flex-col items-center">
-      <h2 className="text-xl font-semibold text-white mb-2 text-center">Step 3: Position Design & Choose Style</h2>
-      <p className="text-gray-400 mb-6 text-center">Click a design to select. Drag to move, use handles to resize/rotate.</p>
+      <h2 className="text-xl font-semibold text-white mb-2 text-center">{t('editorTitle')}</h2>
+      <p className="text-gray-400 mb-6 text-center">{t('editorSubTitle')}</p>
       
-      <div 
-        ref={containerRef} 
-        className="relative w-full max-w-xl mx-auto touch-none select-none"
-        onClick={() => setSelectedDesignIndex(null)}
-      >
-        <img ref={walletImageRef} src={walletImage} alt="Product" className="w-full h-auto rounded-lg shadow-lg" />
-        
-        {designs.map((design, index) => (
-            <div
-            key={index}
-            className={`absolute ${selectedDesignIndex === index ? 'border-2 border-dashed border-indigo-400' : 'border-2 border-transparent hover:border-indigo-400/20'}`}
-            style={{
-              left: `${design.position.x}px`,
-              top: `${design.position.y}px`,
-              width: `${design.size.width}px`,
-              height: `${design.size.height}px`,
-              transform: `rotate(${design.rotation}deg)`,
-              zIndex: selectedDesignIndex === index ? 10 : 1,
-            }}
-            onMouseDown={(e) => handleMouseDown(e, 'body', index)}
-            onClick={(e) => { e.stopPropagation(); setSelectedDesignIndex(index); }}
-          >
-            <img src={designImages[index]} alt={`Design ${index}`} className="w-full h-full object-contain pointer-events-none" />
-            
-            {selectedDesignIndex === index && (
-                <>
-                {cornerHandles.map(handle => (
-                    <div
-                    key={handle}
-                    className="absolute w-4 h-4 bg-indigo-500 rounded-full border-2 border-gray-800"
-                    style={{
-                        top: handle.includes('n') ? '-8px' : 'auto',
-                        bottom: handle.includes('s') ? '-8px' : 'auto',
-                        left: handle.includes('w') ? '-8px' : 'auto',
-                        right: handle.includes('e') ? '-8px' : 'auto',
-                        cursor: `${handle}-resize`,
-                    }}
-                    onMouseDown={(e) => handleMouseDown(e, handle, index)}
-                    />
-                ))}
-
-                {sideHandles.map(handle => {
-                    const baseClass = "absolute bg-indigo-500 border-2 border-gray-800 rounded-sm";
-                    let style: React.CSSProperties = {};
-                    let className = baseClass;
-
-                    if (handle === 'n' || handle === 's') {
-                        className += ' w-5 h-2';
-                        style = { left: '50%', transform: 'translateX(-50%)', cursor: 'ns-resize' };
-                        if (handle === 'n') style.top = '-5px'; else style.bottom = '-5px';
-                    } else { // e or w
-                        className += ' w-2 h-5';
-                        style = { top: '50%', transform: 'translateY(-50%)', cursor: 'ew-resize' };
-                        if (handle === 'w') style.left = '-5px'; else style.right = '-5px';
-                    }
-
-                    return (
-                        <div
-                            key={handle}
-                            className={className}
-                            style={style}
-                            onMouseDown={(e) => handleMouseDown(e, handle, index)}
-                        />
-                    )
-                })}
-
-
-                <div
-                    className="absolute left-1/2 -bottom-8 w-4 h-4 bg-indigo-500 rounded-full border-2 border-gray-800 cursor-crosshair"
-                    style={{ transform: 'translateX(-50%)' }}
-                    onMouseDown={(e) => handleMouseDown(e, 'rotate', index)}
-                >
-                    <div className="absolute bottom-full left-1/2 w-px h-4 bg-indigo-400/70" style={{transform: `rotate(${-design.rotation}deg)`, transformOrigin: 'bottom center'}}/>
-                </div>
-                </>
-            )}
-          </div>
-        ))}
-      </div>
+      {imageAspectRatio ? (
+        <div 
+          ref={containerRef} 
+          className="relative w-full max-w-xl mx-auto touch-none select-none"
+          style={{ aspectRatio: imageAspectRatio }}
+          onClick={() => setSelectedDesignIndex(null)}
+        >
+          <img ref={walletImageRef} src={walletImage} alt="Product" className="absolute top-0 left-0 w-full h-full rounded-lg shadow-lg" />
+          
+          {designs.map((design, index) => (
+              <div
+              key={index}
+              className={`absolute ${selectedDesignIndex === index ? 'border-2 border-dashed border-indigo-400' : 'border-2 border-transparent hover:border-indigo-400/20'}`}
+              style={{
+                left: `${design.position.x}px`,
+                top: `${design.position.y}px`,
+                width: `${design.size.width}px`,
+                height: `${design.size.height}px`,
+                transform: `rotate(${design.rotation}deg)`,
+                zIndex: selectedDesignIndex === index ? 10 : 1,
+              }}
+              onMouseDown={(e) => handleMouseDown(e, 'body', index)}
+              onClick={(e) => { e.stopPropagation(); setSelectedDesignIndex(index); }}
+            >
+              <img src={designImages[index]} alt={`${t('design')} ${index}`} className="w-full h-full object-contain pointer-events-none" />
+              
+              {selectedDesignIndex === index && (
+                  <>
+                  {cornerHandles.map(handle => (
+                      <div
+                      key={handle}
+                      className="absolute w-4 h-4 bg-indigo-500 rounded-full border-2 border-gray-800"
+                      style={{
+                          top: handle.includes('n') ? '-8px' : 'auto',
+                          bottom: handle.includes('s') ? '-8px' : 'auto',
+                          left: handle.includes('w') ? '-8px' : 'auto',
+                          right: handle.includes('e') ? '-8px' : 'auto',
+                          cursor: `${handle}-resize`,
+                      }}
+                      onMouseDown={(e) => handleMouseDown(e, handle, index)}
+                      />
+                  ))}
+  
+                  {sideHandles.map(handle => {
+                      const baseClass = "absolute bg-indigo-500 border-2 border-gray-800 rounded-sm";
+                      let style: React.CSSProperties = {};
+                      let className = baseClass;
+  
+                      if (handle === 'n' || handle === 's') {
+                          className += ' w-5 h-2';
+                          style = { left: '50%', transform: 'translateX(-50%)', cursor: 'ns-resize' };
+                          if (handle === 'n') style.top = '-5px'; else style.bottom = '-5px';
+                      } else { // e or w
+                          className += ' w-2 h-5';
+                          style = { top: '50%', transform: 'translateY(-50%)', cursor: 'ew-resize' };
+                          if (handle === 'w') style.left = '-5px'; else style.right = '-5px';
+                      }
+  
+                      return (
+                          <div
+                              key={handle}
+                              className={className}
+                              style={style}
+                              onMouseDown={(e) => handleMouseDown(e, handle, index)}
+                          />
+                      )
+                  })}
+  
+  
+                  <div
+                      className="absolute left-1/2 -bottom-8 w-4 h-4 bg-indigo-500 rounded-full border-2 border-gray-800 cursor-crosshair"
+                      style={{ transform: 'translateX(-50%)' }}
+                      onMouseDown={(e) => handleMouseDown(e, 'rotate', index)}
+                  >
+                      <div className="absolute bottom-full left-1/2 w-px h-4 bg-indigo-400/70" style={{transform: `rotate(${-design.rotation}deg)`, transformOrigin: 'bottom center'}}/>
+                  </div>
+                  </>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="w-full max-w-xl mx-auto flex justify-center items-center min-h-[400px]">
+           <Spinner text={t('loadingEditor')}/>
+        </div>
+      )}
       
       <div className="w-full max-w-xl mx-auto mt-8">
-        <h3 className="text-lg font-semibold text-white mb-4 text-center">Mockup Effect</h3>
-        <div className="flex justify-center items-center gap-2 sm:gap-4 p-2 bg-gray-900/50 rounded-full">
+        <h3 className="text-lg font-semibold text-white mb-2 text-center">{t('mockupEffect')}</h3>
+        <p className="text-gray-400 text-center text-sm mb-4 min-h-[40px] px-4">{mockupTypeDescriptions[selectedType]}</p>
+        <div className="flex justify-center items-center gap-2 sm:gap-4 p-2 bg-gray-900/50 rounded-lg">
           {Object.values(MockupType).map((type) => (
             <button
               key={type}
@@ -337,7 +383,7 @@ const MockupEditor: React.FC<MockupEditorProps> = ({
                 : 'bg-gray-700 text-gray-300 hover:bg-gray-600 focus:ring-gray-500'
               }`}
             >
-              {type}
+              {t(type.toLowerCase() as any)}
             </button>
           ))}
         </div>
@@ -345,7 +391,7 @@ const MockupEditor: React.FC<MockupEditorProps> = ({
 
       <button
         onClick={handleGenerateClick}
-        disabled={isLoading}
+        disabled={isLoading || !imageAspectRatio}
         className="mt-8 px-8 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-800 transition-all duration-200 disabled:bg-indigo-400 disabled:cursor-not-allowed flex items-center"
       >
         {isLoading ? (
@@ -354,10 +400,10 @@ const MockupEditor: React.FC<MockupEditorProps> = ({
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            Generating...
+            {t('generatingButton')}...
           </>
         ) : (
-          'Generate Mockup'
+          t('generateButton')
         )}
       </button>
     </div>
