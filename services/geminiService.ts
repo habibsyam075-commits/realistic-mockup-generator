@@ -55,14 +55,15 @@ export const generateMockup = async (
   const ai = new GoogleGenAI({ apiKey });
   const prompt = getPromptForType(mockupType);
   
+  // The image model expects the image data part to come BEFORE the text prompt part.
   const parts = [
-    { text: prompt },
     {
       inlineData: {
           data: guideImage.split(',')[1],
           mimeType: guideImage.startsWith('data:image/png') ? 'image/png' : 'image/jpeg',
       }
-    }
+    },
+    { text: prompt }
   ];
 
 
